@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EPUB Context Extractor</title>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+    }
+    .drop-zone {
+      border: 2px dashed #888;
+      border-radius: 1rem;
+      padding: 3rem 1rem;
+      text-align: center;
+      color: #666;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .drop-zone.dragover {
+      background: #f0f0f0;
+    }
+    textarea, select, button, input[type="checkbox"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.5rem;
+      margin-top: 0.5rem;
+      font-size: 1rem;
+    }
+    select {
+      appearance: none;
+      border: 1px solid #ccc;
+      border-radius: 0.5rem;
+      background: #fff url('data:image/svg+xml;base64,PHN2ZyBoZWlnaHQ9IjUxMnB0IiB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgd2lkdGg9IjUxMnB0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxnPjxwYXRoIGQ9Ik0yNTYuMDAyIDM2OS44NTlsLTIwMy40OTgtMjAzLjQ5OGMtOC4zMDItOC4zMDItOC4zMDItMjEuNzg2IDAtMzAuMDg4bDEwLjM1MS0xMC4zNTFjOC4zMDItOC4zMDIgMjEuNzgyLTguMzAyIDMwLjA4NCAwbDE2MS45NjcgMTYxLjk2NiAxNjEuOTY3LTE2MS45NjZjOC4zMDItOC4zMDIgMjEuNzgyLTguMzAyIDMwLjA4NCAwbDEwLjM1IDEwLjM1MWM4LjMwMiA4LjMwMiA4LjMwMiAyMS43ODYgMCAzMC4wODhsLTIwMy40OTggMjAzLjQ5OGMtOC4zMDIgOC4zMDItMjEuNzg2IDguMzAyLTMwLjA4OCAweiIvPjwvZz48L3N2Zz4=') no-repeat right 0.75rem center/0.6rem 0.6rem;
+    }
+    input[type="checkbox"] {
+      width: auto;
+      margin-right: 0.5rem;
+    }
+    button {
+      background: #007acc;
+      color: #fff;
+      border: none;
+      border-radius: 0.5rem;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #005fa3;
+    }
+    #status {
+      margin-top: 0.5rem;
+      font-style: italic;
+      color: #444;
+    }
+  </style>
+</head>
+<body>
+  <h1>EPUB Context Extractor</h1>
+
+  <div id="dropZone" class="drop-zone">
+    Drag & drop your <code>.epub</code> file here, or click to browse
+    <input id="fileInput" type="file" accept=".epub" style="display:none" />
+  </div>
+  <div id="status">No EPUB loaded.</div>
+
+  <label for="quoteInput"><strong>Verbatim quote from the text</strong></label>
+  <textarea id="quoteInput" rows="4" placeholder="Paste the exact quote here..."></textarea>
+
+  <label for="contextSelect"><strong>Words on each side of the quote</strong></label>
+  <select id="contextSelect">
+    <option value="1">1</option>
+    <option value="10">10</option>
+    <option value="100">100</option>
+    <option value="1000" selected>1,000</option>
+    <option value="10000">10,000</option>
+    <option value="100000">100,000</option>
+  </select>
+
+  <label for="beforeOnlyToggle" style="display:flex;align-items:center;gap:0.5rem;">
+    <input id="beforeOnlyToggle" type="checkbox" />Include only words <em>before</em> the quote
+  </label>
+
+  <label for="chapterLimitToggle" style="display:flex;align-items:center;gap:0.5rem;">
+    <input id="chapterLimitToggle" type="checkbox" />Limit context to current chapter (H1/H2)
+  </label>
+
+  <button id="extractBtn">Copy context to clipboard</button>
+
+  <label for="outputArea"><strong>Context snippet (auto‑filled)</strong></label>
+  <textarea id="outputArea" rows="8" readonly></textarea>
+
+  <script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const quoteInput = document.getElementById('quoteInput');
+    const contextSelect = document.getElementById('contextSelect');
+    const beforeOnlyToggle = document.getElementById('beforeOnlyToggle');
+    const chapterLimitToggle = document.getElementById('chapterLimitToggle');
+    const outputArea = document.getElementById('outputArea');
+    const statusDiv = document.getElementById('status');
+    const extractBtn = document.getElementById('extractBtn');
+
+    let originalWords = [];
+    let lowerWords = [];
+    let boundaryIndices = []; // word indices marking chapter starts
+
+    const textFileRegex = /\.(xhtml|html|htm|txt)$/i;
+
+    // Helpers
+    const preventDefaults = e => { e.preventDefault(); e.stopPropagation(); };
+
+    // Drag‑n‑drop
+    ['dragenter','dragover','dragleave','drop'].forEach(evt => {
+      dropZone.addEventListener(evt, preventDefaults, false);
+    });
+    ['dragenter','dragover'].forEach(evt => {
+      dropZone.addEventListener(evt, () => dropZone.classList.add('dragover'), false);
+    });
+    ['dragleave','drop'].forEach(evt => {
+      dropZone.addEventListener(evt, () => dropZone.classList.remove('dragover'), false);
+    });
+
+    dropZone.addEventListener('drop', e => {
+      const file = e.dataTransfer.files[0];
+      if (file) loadEpub(file);
+    });
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (file) loadEpub(file);
+    });
+
+    // Load and flatten EPUB, recording chapter boundaries
+    async function loadEpub(file) {
+      statusDiv.textContent = 'Reading epub…';
+      outputArea.value = '';
+      originalWords = [];
+      lowerWords = [];
+      boundaryIndices = [0]; // start-of-book counts as boundary
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const entries = Object.values(zip.files).filter(f => textFileRegex.test(f.name));
+        if (!entries.length) throw new Error('No text chapters found');
+
+        for (const entry of entries) {
+          const raw = await entry.async('string');
+          // Mark headings with sentinel token before stripping
+          const withMarkers = raw
+            .replace(/<h[12][^>]*>/gi, ' CHAP_BOUNDARY ')
+            .replace(/<\/h[12]>/gi, ' ');
+          const stripped = withMarkers.replace(/<[^>]*>/g, ' ');
+          const words = stripped.match(/\S+/g) || [];
+          for (const word of words) {
+            if (word === 'CHAP_BOUNDARY') {
+              if (originalWords.length !== 0) boundaryIndices.push(originalWords.length);
+            } else {
+              originalWords.push(word);
+              lowerWords.push(word.toLowerCase());
+            }
+          }
+        }
+        // Add sentinel for end-of-book
+        boundaryIndices.push(originalWords.length);
+
+        statusDiv.textContent = `Loaded “${file.name}” — ${originalWords.length.toLocaleString('en-GB')} words.`;
+        refreshSnippet();
+      } catch (err) {
+        console.error(err);
+        statusDiv.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    function findChapterBounds(index) {
+      // Assumes boundaryIndices is sorted
+      let prev = 0;
+      let next = originalWords.length;
+      for (let i = 0; i < boundaryIndices.length; i++) {
+        if (boundaryIndices[i] <= index) prev = boundaryIndices[i]; else { next = boundaryIndices[i]; break; }
+      }
+      return [prev, next];
+    }
+
+    // Core logic
+    function refreshSnippet(copy = false) {
+      if (!originalWords.length) { outputArea.value = ''; return; }
+      const quote = quoteInput.value.trim();
+      if (!quote) { outputArea.value = ''; return; }
+
+      const radius = Math.max(1, parseInt(contextSelect.value, 10));
+      const quoteWords = quote.replace(/\s+/g, ' ').split(' ');
+      const lowerQuoteWords = quoteWords.map(w => w.toLowerCase());
+
+      // find first occurrence
+      let foundAt = -1;
+      const maxStart = lowerWords.length - lowerQuoteWords.length;
+      outer: for (let i = 0; i <= maxStart; i++) {
+        for (let j = 0; j < lowerQuoteWords.length; j++) {
+          if (lowerWords[i + j] !== lowerQuoteWords[j]) continue outer;
+        }
+        foundAt = i;
+        break;
+      }
+      if (foundAt === -1) { outputArea.value = 'Quote not found.'; statusDiv.textContent = 'Quote not found.'; return; }
+
+      const beforeOnly = beforeOnlyToggle.checked;
+
+      let chapterStart = 0;
+      let chapterEnd = originalWords.length;
+      if (chapterLimitToggle.checked) {
+        [chapterStart, chapterEnd] = findChapterBounds(foundAt);
+      }
+
+      const start = Math.max(chapterStart, foundAt - radius);
+      const end = beforeOnly ? Math.min(foundAt + lowerQuoteWords.length, chapterEnd) : Math.min(chapterEnd, foundAt + lowerQuoteWords.length + radius);
+      const fragment = originalWords.slice(start, end).join(' ');
+
+      outputArea.value = fragment;
+      statusDiv.textContent = `Previewing ${end - start} words.`;
+
+      if (copy) {
+        navigator.clipboard.writeText(fragment).then(() => {
+          statusDiv.textContent = `Copied ${end - start} words to clipboard ✔️`;
+        }).catch(err => {
+          console.error(err);
+          statusDiv.textContent = 'Copied to output box, but clipboard failed.';
+        });
+      }
+    }
+
+    // Live updates
+    quoteInput.addEventListener('input', () => refreshSnippet(false));
+    contextSelect.addEventListener('change', () => refreshSnippet(false));
+    beforeOnlyToggle.addEventListener('change', () => refreshSnippet(false));
+    chapterLimitToggle.addEventListener('change', () => refreshSnippet(false));
+
+    // Copy button uses copy=true
+    extractBtn.addEventListener('click', () => refreshSnippet(true));
+  </script>
+</body>
+</html>
