@@ -91,6 +91,19 @@
     <input id="chapterLimitToggle" type="checkbox" />Limit context to current chapter (H1/H2)
   </label>
 
+  <label for="promptSelect"><strong>Extra prompt</strong></label>
+  <div style="display:flex;align-items:center;gap:0.5rem;">
+    <select id="promptSelect" style="flex:1;">
+      <option value="">(None)</option>
+      <option selected value="Explain what is happening in the following passage from {title}:">Explain passage</option>
+      <option value="Remind me who the characters are in the following passage {title}:">Character reminder</option>
+      <option value="Define the five most unusual words in the following passage of {title}">Unusual words</option>
+    </select>
+    <label for="spoilerToggle" style="display:flex;align-items:center;gap:0.25rem;">
+      <input id="spoilerToggle" type="checkbox" />Spoilers
+    </label>
+  </div>
+
   <button id="extractBtn">Copy context to clipboard</button>
 
   <label for="outputArea"><strong>Context snippet (auto‑filled)</strong></label>
@@ -103,6 +116,8 @@
     const contextSelect = document.getElementById('contextSelect');
     const beforeOnlyToggle = document.getElementById('beforeOnlyToggle');
     const chapterLimitToggle = document.getElementById('chapterLimitToggle');
+    const promptSelect = document.getElementById('promptSelect');
+    const spoilerToggle = document.getElementById('spoilerToggle');
     const outputArea = document.getElementById('outputArea');
     const statusDiv = document.getElementById('status');
     const extractBtn = document.getElementById('extractBtn');
@@ -110,6 +125,7 @@
     let originalWords = [];
     let lowerWords = [];
     let boundaryIndices = []; // word indices marking chapter starts
+    let epubTitle = '';
 
     const textFileRegex = /\.(xhtml|html|htm|txt)$/i;
 
@@ -146,6 +162,7 @@
       originalWords = [];
       lowerWords = [];
       boundaryIndices = [0]; // start-of-book counts as boundary
+      epubTitle = file.name.replace(/\.epub$/i, '');
       try {
         const arrayBuffer = await file.arrayBuffer();
         const zip = await JSZip.loadAsync(arrayBuffer);
@@ -225,12 +242,18 @@
       const start = Math.max(chapterStart, foundAt - radius);
       const end = beforeOnly ? Math.min(foundAt + lowerQuoteWords.length, chapterEnd) : Math.min(chapterEnd, foundAt + lowerQuoteWords.length + radius);
       const fragment = originalWords.slice(start, end).join(' ');
+      let result = fragment;
+      const promptText = promptSelect.value
+        ? promptSelect.value.replace('{title}', epubTitle || '') +
+          (spoilerToggle.checked ? ' (spoilers ok)' : ' (no spoilers)')
+        : '';
+      if (promptText) result += '\n\n' + promptText;
 
-      outputArea.value = fragment;
+      outputArea.value = result;
       statusDiv.textContent = `Previewing ${end - start} words.`;
 
       if (copy) {
-        navigator.clipboard.writeText(fragment).then(() => {
+        navigator.clipboard.writeText(result).then(() => {
           statusDiv.textContent = `Copied ${end - start} words to clipboard ✔️`;
         }).catch(err => {
           console.error(err);
@@ -244,6 +267,8 @@
     contextSelect.addEventListener('change', () => refreshSnippet(false));
     beforeOnlyToggle.addEventListener('change', () => refreshSnippet(false));
     chapterLimitToggle.addEventListener('change', () => refreshSnippet(false));
+    promptSelect.addEventListener('change', () => refreshSnippet(false));
+    spoilerToggle.addEventListener('change', () => refreshSnippet(false));
 
     // Copy button uses copy=true
     extractBtn.addEventListener('click', () => refreshSnippet(true));
